@@ -8,14 +8,31 @@ Telegram-first сервис, который по короткому диалог
 
 ## Backend
 
-The backend uses Node.js, TypeScript, and the built-in HTTP server. It currently
-exposes a health endpoint and keeps configuration in environment variables.
+The backend uses Node.js, TypeScript, and the built-in HTTP server. It exposes a
+health endpoint and a Telegram webhook, with configuration kept in environment
+variables.
 
 ```bash
 cp .env.example .env
 npm install
 npm run dev
 curl http://127.0.0.1:3000/health
+```
+
+Set `TELEGRAM_BOT_TOKEN` in `.env` to enable replies to Telegram. Keep the token
+out of source control and logs. `TELEGRAM_WEBHOOK_SECRET` is optional but should
+be set for a deployed webhook; Telegram sends it as the
+`X-Telegram-Bot-Api-Secret-Token` header.
+
+The webhook endpoint is `POST /webhook/telegram`. It accepts Telegram updates,
+creates or finds the sender on `/start`, and sends a welcome message. Updates
+without `/start` are acknowledged without a reply. For local testing, send a
+fixture directly:
+
+```bash
+curl -X POST http://127.0.0.1:3000/webhook/telegram \
+  -H 'content-type: application/json' \
+  -d '{"update_id":1,"message":{"chat":{"id":123},"from":{"id":123,"first_name":"Ada"},"text":"/start"}}'
 ```
 
 The health endpoint returns `{"status":"ok"}`. For a production-style local
