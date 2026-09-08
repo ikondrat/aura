@@ -3,6 +3,7 @@ import {
   type WebResearchResult,
   type WebResearchSource,
 } from "./web-research.js";
+import type { ModelRoutingInput } from "./model-routing.js";
 
 export type ResearchHistoryRole = "user" | "assistant" | "system" | "tool";
 export type ModelMessageRole = "user" | "assistant";
@@ -31,10 +32,15 @@ export interface ModelGatewayRequest {
   messages: readonly ModelMessage[];
 }
 
+export interface ModelGatewayOptions {
+  signal?: AbortSignal;
+  routing?: ModelRoutingInput;
+}
+
 export interface ModelGateway {
   complete(
     request: ModelGatewayRequest,
-    options?: { signal?: AbortSignal },
+    options?: ModelGatewayOptions,
   ): Promise<unknown>;
 }
 
@@ -43,6 +49,8 @@ export interface ResearchAgentInput {
   history: readonly ResearchConversationMessage[];
   request: string;
   signal?: AbortSignal;
+  /** Optional trusted routing context; task text is never used to set it. */
+  routing?: ModelRoutingInput;
 }
 
 export interface ClarificationResult {
@@ -495,7 +503,7 @@ export class ResearchAgentService {
     const request = buildGatewayRequest(validated, evidence);
     let rawResponse: unknown;
     try {
-      rawResponse = await this.callGateway(request, input.signal);
+      rawResponse = await this.callGateway(request, input.signal, input.routing);
     } catch (error) {
       const reason = failureReason(error);
       this.logger.warn("Research agent provider failure", { reason });
@@ -531,12 +539,16 @@ export class ResearchAgentService {
   private async callGateway(
     request: ModelGatewayRequest,
     parentSignal?: AbortSignal,
+    routing?: ModelRoutingInput,
   ): Promise<unknown> {
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let cancel: (() => void) | undefined;
     const gatewayPromise = Promise.resolve().then(() =>
-      this.gateway.complete(request, { signal: controller.signal }),
+      this.gateway.complete(request, {
+        signal: controller.signal,
+        ...(routing ? { routing } : {}),
+      }),
     );
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
