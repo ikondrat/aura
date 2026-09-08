@@ -8,6 +8,8 @@ const userId = "00000000-0000-4000-8000-000000000101";
 const otherUserId = "00000000-0000-4000-8000-000000000102";
 const agentId = "00000000-0000-4000-8000-000000000111";
 const otherAgentId = "00000000-0000-4000-8000-000000000112";
+const conversationId = "00000000-0000-4000-8000-000000000121";
+const otherConversationId = "00000000-0000-4000-8000-000000000122";
 
 test("usage events are persisted, deduplicated, aggregated, and owner-scoped", {
   skip: !testDatabaseUrl,
@@ -27,10 +29,16 @@ test("usage events are persisted, deduplicated, aggregated, and owner-scoped", {
               ($3, $4, 'B', 'Research', 'English', 'Concise')`,
       [agentId, userId, otherAgentId, otherUserId],
     );
+    await pool.query(
+      `INSERT INTO conversations (id, user_id)
+       VALUES ($1, $2), ($3, $4)`,
+      [conversationId, userId, otherConversationId, otherUserId],
+    );
 
     const first = await repository.record({
       userId,
       agentId,
+      conversationId,
       requestId: "request-1",
       inputTokens: "9007199254740993",
       outputTokens: 2n,
@@ -72,6 +80,11 @@ test("usage events are persisted, deduplicated, aggregated, and owner-scoped", {
     await assert.rejects(() => repository.record({
       userId,
       agentId: otherAgentId,
+      status: "succeeded",
+    }));
+    await assert.rejects(() => repository.record({
+      userId,
+      conversationId: otherConversationId,
       status: "succeeded",
     }));
     await assert.rejects(() => repository.record({ userId, costMicroUsd: -1, status: "succeeded" }));

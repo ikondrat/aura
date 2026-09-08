@@ -12,6 +12,8 @@ events for the MVP.
 | `agents` | `user_id` is required and references `users.id` | An agent cannot outlive its user |
 | `conversations` | `user_id` is required; optional `agent_id` must belong to the same user | Deleting a user cascades; deleting an agent detaches the conversation |
 | `messages` | Reached only through an owner-scoped conversation | Deleting a conversation cascades to messages |
+| `usage_events` | `user_id` is required; optional agent/conversation references must belong to the same user | Deleting a user cascades; deleting an agent is restricted; deleting a conversation clears only the correlation reference |
+| `onboarding_drafts` | `user_id` is required and all draft operations are owner-scoped | Deleting a user cascades; at most one non-terminal draft exists per user |
 
 `telegram_user_id` is a non-null PostgreSQL `bigint`, so Telegram identifiers
 larger than a 32-bit integer round-trip without a database overflow. Application
@@ -55,9 +57,10 @@ boundaries.
 
 Agent references are checked against the event owner, and deleting an agent
 with usage history is rejected so the immutable record remains valid.
-Conversation IDs are nullable correlation references until the conversation
-migration is applied; deleting a conversation therefore does not delete
-accounting history. Deleting a user cascades to the user's usage events.
+Migration `005_enforce_tenant_relationships` also checks conversation IDs
+against the event owner. Deleting a conversation clears only that correlation
+reference and does not delete accounting history. Deleting a user cascades to
+the user's usage events.
 Usage events cannot be updated; account deletion is the normal removal path.
 
 ## Migrations
@@ -82,7 +85,10 @@ agent-detach behavior. Also record successful, failed, zero-usage, and
 duplicate-request usage events and query each user's period and aggregate.
 Verify that empty content, invalid roles, negative values, invalid status,
 cross-owner references, updates, and cross-user reads are rejected or return
-no data. Check the half-open period boundaries and delete behavior.
+no data. Check that cross-owner agent and conversation attachments are rejected
+by the database constraints, the half-open period boundaries, and delete
+behavior. Deleting a conversation must retain its usage event with a null
+correlation reference.
 Finish by rolling back the migrations and confirming the application tables are
 absent.
 
