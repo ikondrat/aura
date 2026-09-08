@@ -1,7 +1,8 @@
 # Database
 
-AURA uses PostgreSQL for durable tenant-owned data. The migrations add the user
-and agent foundation plus immutable usage accounting events for the MVP.
+AURA uses PostgreSQL for durable tenant-owned data. The migrations add the user,
+agent, conversation, and message foundation plus immutable usage accounting
+events for the MVP.
 
 ## Relationships
 
@@ -9,6 +10,8 @@ and agent foundation plus immutable usage accounting events for the MVP.
 | --- | --- | --- |
 | `users` | Root tenant identified by `id`; Telegram identity is unique | Deleting a user cascades to their agents |
 | `agents` | `user_id` is required and references `users.id` | An agent cannot outlive its user |
+| `conversations` | `user_id` is required; optional `agent_id` must belong to the same user | Deleting a user cascades; deleting an agent detaches the conversation |
+| `messages` | Reached only through an owner-scoped conversation | Deleting a conversation cascades to messages |
 
 `telegram_user_id` is a non-null PostgreSQL `bigint`, so Telegram identifiers
 larger than a 32-bit integer round-trip without a database overflow. Application
@@ -18,6 +21,21 @@ Agent onboarding fields reject empty strings. Agent lifecycle is constrained to
 `draft`, `active`, `paused`, or `archived`. `created_at` and `updated_at` are
 UTC-aware `timestamptz` values; a trigger refreshes `updated_at` on updates.
 Indexes cover Telegram identity lookup and agent lookup by owner.
+
+## Conversations and messages
+
+Conversations have an `active` or `archived` status and are ordered by their
+latest activity (`updated_at DESC, id DESC`). Inserting a message touches the
+conversation activity timestamp. Messages support the `user`, `assistant`,
+`system`, and `tool` roles, require non-empty content of at most 10,000
+characters, and are ordered chronologically with `created_at ASC, id ASC` as a
+deterministic tie-breaker. Provider metadata is optional JSONB.
+
+`idempotency_key` is optional and unique within a conversation. When a retry
+uses the same key, `ConversationRepository.appendMessage` returns the original
+message with `duplicate: true`; a different payload is not appended. Repository
+reads and writes always require the owning `user_id`, including indirect
+message access through a conversation.
 
 ## Usage events
 
@@ -58,10 +76,13 @@ kept when the last application migration is rolled back. The first migration's
 rollback removes the `users`, `agents`, and timestamp trigger objects.
 
 For a clean verification, apply the migrations, insert two users and agents,
-record successful, failed, zero-usage, and duplicate-request events, and query
-each user's period and aggregate. Verify that negative values, invalid status,
-cross-owner agent references, updates, and cross-user reads are rejected or
-return no data. Check the half-open period boundaries and delete behavior.
+create owner-scoped conversations, append messages with equal timestamps, and
+verify deterministic ordering, retry idempotency, cross-user isolation, and
+agent-detach behavior. Also record successful, failed, zero-usage, and
+duplicate-request usage events and query each user's period and aggregate.
+Verify that empty content, invalid roles, negative values, invalid status,
+cross-owner references, updates, and cross-user reads are rejected or return
+no data. Check the half-open period boundaries and delete behavior.
 Finish by rolling back the migrations and confirming the application tables are
 absent.
 
