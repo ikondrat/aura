@@ -7,13 +7,17 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch backend/server.ts",
     "start": "node dist/backend/server.js",
-    "test": "node --import=tsx --test backend/app.test.ts"
+    "test": "node --import=tsx --test backend/app.test.ts backend/db/usage-events.test.ts",
+    "db:migrate": "tsx backend/db/migrate.ts up",
+    "db:rollback": "tsx backend/db/migrate.ts down"
   },
   "dependencies": {
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

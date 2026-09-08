@@ -38,6 +38,14 @@ curl -X POST http://127.0.0.1:3000/webhook/telegram \
 The health endpoint returns `{"status":"ok"}`. For a production-style local
 run, use `npm run build && npm start`. Run the automated checks with `npm test`.
 
+## PostgreSQL migrations
+
+The durable database foundation uses PostgreSQL and the `pg` client. Set
+`DATABASE_URL` in `.env`, then apply or roll back migrations with
+`npm run db:migrate` and `npm run db:rollback`. Migration details, relationships,
+usage-event accounting, constraints, and disposable-database verification steps are documented in
+[`docs/database.md`](docs/database.md).
+
 ## Memory controls
 
 Memory is always scoped to the Telegram user who created it. The memory

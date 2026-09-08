@@ -2,6 +2,7 @@ export interface AppConfig {
   host: string;
   nodeEnv: string;
   port: number;
+  databaseUrl?: string;
   telegramBotToken?: string;
   telegramApiBaseUrl: string;
   telegramWebhookSecret?: string;
@@ -33,6 +34,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.HOST ?? "127.0.0.1",
     nodeEnv: env.NODE_ENV ?? "development",
     port,
+    databaseUrl: env.DATABASE_URL?.trim() || undefined,
     telegramBotToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
     telegramApiBaseUrl: telegramApiBaseUrl.replace(/\/$/, ""),
     telegramWebhookSecret,
