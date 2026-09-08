@@ -51,12 +51,23 @@ storing the supplied text:
 /edit_memory <id> <new text>
 /forget <id>
 /forget_all
+/export
+/delete_account confirm
 ```
 
 Profile and project memories can be listed, edited, and deleted individually or
-in full. The current backend uses an in-memory store while the database work is
-being completed, so memory is cleared when the process restarts. No memory is
-written by a background process without explicit consent.
+in full. `/export` sends the requesting user's stored profile and memories;
+`/delete_account confirm` permanently removes them. Data controls are available
+only in a private Telegram chat. The current backend uses an in-memory store
+while the database work is being completed, so memory is cleared when the
+process restarts. No memory is written by a background process without explicit
+consent.
+
+## Security and closed beta
+
+Webhook requests are rate-limited and production startup requires
+`TELEGRAM_WEBHOOK_SECRET`. See [SECURITY.md](SECURITY.md) for the review and
+[BETA.md](BETA.md) for the closed-beta checklist and aggregate metrics.
 
 ## Цель MVP
 

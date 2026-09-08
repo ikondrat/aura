@@ -20,6 +20,8 @@ export interface TelegramUser {
 
 export interface TelegramUserStore {
   upsert(input: TelegramUserInput): { user: TelegramUser; created: boolean };
+  get(telegramUserId: number): TelegramUser | undefined;
+  delete(telegramUserId: number): boolean;
 }
 
 export class InMemoryTelegramUserStore implements TelegramUserStore {
@@ -46,6 +48,15 @@ export class InMemoryTelegramUserStore implements TelegramUserStore {
     };
     this.users.set(input.telegramUserId, user);
     return { user, created: true };
+  }
+
+  get(telegramUserId: number): TelegramUser | undefined {
+    const user = this.users.get(telegramUserId);
+    return user ? { ...user } : undefined;
+  }
+
+  delete(telegramUserId: number): boolean {
+    return this.users.delete(telegramUserId);
   }
 
   get size(): number {

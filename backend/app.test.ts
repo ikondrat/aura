@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 import { createApp } from "./app.js";
+import { readConfig } from "./config.js";
 import { InMemoryMemoryStore, MemoryConsentRequiredError } from "./memory.js";
 import { InMemoryTelegramUserStore, TelegramBotClient } from "./telegram.js";
 
@@ -248,4 +249,96 @@ test("Telegram memory commands support consented create, view, edit, and deletio
     server.close();
     await once(server, "close");
   }
+});
+
+test("webhook rate limiting returns 429 without trusting forwarded headers", async () => {
+  const server = createApp({
+    rateLimit: { maxRequests: 1, windowMs: 60_000 },
+  }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const request = () => fetch(`http://127.0.0.1:${address.port}/webhook/telegram`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "203.0.113.10",
+      },
+      body: JSON.stringify({ message: { chat: { id: 42 }, from: { id: 7 }, text: "/start" } }),
+    });
+
+    assert.equal((await request()).status, 200);
+    const limited = await request();
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get("retry-after"), "60");
+    assert.deepEqual(await limited.json(), { error: "Too many requests" });
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("export and confirmed account deletion only affect the requesting user", async () => {
+  const messages: string[] = [];
+  const userStore = new InMemoryTelegramUserStore();
+  const memoryStore = new InMemoryMemoryStore();
+  const server = createApp({
+    userStore,
+    memoryStore,
+    telegramClient: {
+      sendMessage: async (_chatId, text) => {
+        messages.push(text);
+      },
+    },
+  }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  const sendCommand = async (userId: number, text: string, chatType = "private"): Promise<void> => {
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/webhook/telegram`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: { chat: { id: userId, type: chatType }, from: { id: userId, first_name: "Ada" }, text },
+      }),
+    });
+    assert.equal(response.status, 200);
+  };
+
+  try {
+    await sendCommand(7, "/start");
+    await sendCommand(7, "/remember profile Uses English");
+    await sendCommand(8, "/start");
+    await sendCommand(8, "/remember profile Must remain");
+    await sendCommand(7, "/export");
+    assert.match(messages.at(-1) ?? "", /Uses English/);
+
+    await sendCommand(7, "/delete_account");
+    assert.match(messages.at(-1) ?? "", /delete_account confirm/);
+    await sendCommand(7, "/delete_account confirm");
+    assert.equal(userStore.get(7), undefined);
+    assert.deepEqual(memoryStore.list(7), []);
+    assert.equal(userStore.get(8)?.firstName, "Ada");
+    assert.equal(memoryStore.list(8)[0]?.content, "Must remain");
+
+    await sendCommand(8, "/memory", "group");
+    assert.match(messages.at(-1) ?? "", /private chat/);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("production configuration requires a webhook secret", () => {
+  assert.throws(
+    () => readConfig({ NODE_ENV: "production" }),
+    /TELEGRAM_WEBHOOK_SECRET is required in production/,
+  );
+  assert.equal(
+    readConfig({ NODE_ENV: "production", TELEGRAM_WEBHOOK_SECRET: "beta-secret" }).telegramWebhookSecret,
+    "beta-secret",
+  );
 });

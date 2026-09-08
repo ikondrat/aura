@@ -24,12 +24,17 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error("TELEGRAM_API_BASE_URL must be a valid HTTP(S) URL");
   }
 
+  const telegramWebhookSecret = env.TELEGRAM_WEBHOOK_SECRET?.trim() || undefined;
+  if (env.NODE_ENV === "production" && !telegramWebhookSecret) {
+    throw new Error("TELEGRAM_WEBHOOK_SECRET is required in production");
+  }
+
   return {
     host: env.HOST ?? "127.0.0.1",
     nodeEnv: env.NODE_ENV ?? "development",
     port,
     telegramBotToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
     telegramApiBaseUrl: telegramApiBaseUrl.replace(/\/$/, ""),
-    telegramWebhookSecret: env.TELEGRAM_WEBHOOK_SECRET?.trim() || undefined,
+    telegramWebhookSecret,
   };
 }

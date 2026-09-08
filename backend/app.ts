@@ -29,7 +29,7 @@ const defaultLogger: Logger = {
 };
 
 interface TelegramMessage {
-  chat?: { id?: number | string };
+  chat?: { id?: number | string; type?: string };
   from?: {
     id?: number;
     first_name?: string;
@@ -50,6 +50,51 @@ export interface AppOptions {
   webhookSecret?: string;
   logger?: Logger;
   maxRequestBodyBytes?: number;
+  rateLimit?: {
+    maxRequests: number;
+    windowMs: number;
+  } | false;
+}
+
+const DEFAULT_RATE_LIMIT = { maxRequests: 60, windowMs: 60_000 };
+
+interface RateLimitState {
+  count: number;
+  windowStartedAt: number;
+}
+
+class InMemoryRateLimiter {
+  private readonly clients = new Map<string, RateLimitState>();
+
+  constructor(
+    private readonly maxRequests: number,
+    private readonly windowMs: number,
+  ) {
+    if (!Number.isInteger(maxRequests) || maxRequests < 1) {
+      throw new Error("rateLimit.maxRequests must be a positive integer");
+    }
+    if (!Number.isInteger(windowMs) || windowMs < 1) {
+      throw new Error("rateLimit.windowMs must be a positive integer");
+    }
+  }
+
+  consume(clientId: string, now = Date.now()): { allowed: boolean; retryAfterSeconds: number } {
+    const current = this.clients.get(clientId);
+    if (!current || now - current.windowStartedAt >= this.windowMs) {
+      this.clients.set(clientId, { count: 1, windowStartedAt: now });
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+
+    if (current.count < this.maxRequests) {
+      current.count += 1;
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((this.windowMs - (now - current.windowStartedAt)) / 1000)),
+    };
+  }
 }
 
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
@@ -57,6 +102,8 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
   });
   response.end(body);
 }
@@ -98,6 +145,14 @@ function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   return typeof value === "object" && value !== null;
 }
 
+function isPrivateChat(message: TelegramMessage): boolean {
+  return !message.chat?.type || message.chat.type === "private";
+}
+
+function getClientAddress(request: IncomingMessage): string {
+  return request.socket.remoteAddress ?? "unknown";
+}
+
 interface TelegramCommand {
   name: string;
   args: string;
@@ -114,6 +169,7 @@ async function handleTelegramWebhook(
   request: IncomingMessage,
   response: ServerResponse,
   options: Required<Pick<AppOptions, "userStore" | "logger" | "memoryStore">> & AppOptions,
+  rateLimiter?: InMemoryRateLimiter,
 ): Promise<void> {
   if (
     options.webhookSecret &&
@@ -126,6 +182,15 @@ async function handleTelegramWebhook(
   ) {
     sendJson(response, 401, { error: "Unauthorized" });
     return;
+  }
+
+  if (rateLimiter) {
+    const limit = rateLimiter.consume(getClientAddress(request));
+    if (!limit.allowed) {
+      response.setHeader("retry-after", limit.retryAfterSeconds);
+      sendJson(response, 429, { error: "Too many requests" });
+      return;
+    }
   }
 
   let update: unknown;
@@ -163,6 +228,22 @@ async function handleTelegramWebhook(
     return;
   }
 
+  const dataCommands = [
+    "remember",
+    "memory",
+    "memories",
+    "edit_memory",
+    "forget",
+    "forget_all",
+    "export",
+    "delete_account",
+  ];
+  if (!isPrivateChat(message) && dataCommands.includes(command.name)) {
+    await sendTelegramMessage(options, chatId, "For privacy, data controls are available only in a private chat with AURA.");
+    sendJson(response, 200, { ok: true });
+    return;
+  }
+
   if (command.name === "start") {
     const { created } = options.userStore.upsert({
       telegramUserId,
@@ -188,6 +269,10 @@ async function handleTelegramWebhook(
   } else if (command.name === "forget_all") {
     const deleted = options.memoryStore.deleteAll(telegramUserId);
     await sendTelegramMessage(options, chatId, `Deleted ${deleted} stored memor${deleted === 1 ? "y" : "ies"}.`);
+  } else if (command.name === "export") {
+    await handleExportCommand(options, chatId, telegramUserId);
+  } else if (command.name === "delete_account") {
+    await handleDeleteAccountCommand(options, chatId, telegramUserId, command.args);
   }
 
   sendJson(response, 200, { ok: true });
@@ -220,6 +305,52 @@ async function sendTelegramMessage(
         : undefined;
     options.logger.error("Telegram API request failed", details);
   }
+}
+
+async function handleExportCommand(
+  options: Required<Pick<AppOptions, "userStore" | "memoryStore" | "logger">> & AppOptions,
+  chatId: number | string,
+  userId: number,
+): Promise<void> {
+  const user = options.userStore.get(userId);
+  const memories = options.memoryStore.list(userId);
+  if (!user && memories.length === 0) {
+    await sendTelegramMessage(options, chatId, "No AURA data is stored for this account.");
+    return;
+  }
+
+  const exportData = JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    user: user ?? null,
+    memories,
+  }, null, 2);
+  const chunks = exportData.match(/[\s\S]{1,3500}/g) ?? [];
+  await sendTelegramMessage(options, chatId, `AURA data export (part 1/${chunks.length}):\n${chunks[0] ?? "{}"}`);
+  for (let index = 1; index < chunks.length; index += 1) {
+    await sendTelegramMessage(options, chatId, `AURA data export (part ${index + 1}/${chunks.length}):\n${chunks[index]}`);
+  }
+}
+
+async function handleDeleteAccountCommand(
+  options: Required<Pick<AppOptions, "userStore" | "memoryStore" | "logger">> & AppOptions,
+  chatId: number | string,
+  userId: number,
+  args: string,
+): Promise<void> {
+  if (args.toLowerCase() !== "confirm") {
+    await sendTelegramMessage(options, chatId, "This permanently deletes your AURA profile and memories. Send /delete_account confirm to continue.");
+    return;
+  }
+
+  const deletedMemories = options.memoryStore.deleteAll(userId);
+  const deletedUser = options.userStore.delete(userId);
+  await sendTelegramMessage(
+    options,
+    chatId,
+    deletedUser || deletedMemories > 0
+      ? `Account deleted. Removed ${deletedMemories} stored memor${deletedMemories === 1 ? "y" : "ies"}.`
+      : "No AURA data was stored for this account.",
+  );
 }
 
 async function handleRememberCommand(
@@ -340,6 +471,12 @@ export function createApp(options: AppOptions = {}) {
     memoryStore: options.memoryStore ?? new InMemoryMemoryStore(),
     logger: options.logger ?? defaultLogger,
   };
+  const rateLimiter = options.rateLimit === false
+    ? undefined
+    : new InMemoryRateLimiter(
+        options.rateLimit?.maxRequests ?? DEFAULT_RATE_LIMIT.maxRequests,
+        options.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT.windowMs,
+      );
 
   return createServer((request, response) => {
     const requestUrl = new URL(
@@ -353,7 +490,7 @@ export function createApp(options: AppOptions = {}) {
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/webhook/telegram") {
-      void handleTelegramWebhook(request, response, resolvedOptions).catch(() => {
+      void handleTelegramWebhook(request, response, resolvedOptions, rateLimiter).catch(() => {
         if (!response.headersSent) {
           sendJson(response, 500, { error: "Internal server error" });
         } else {
