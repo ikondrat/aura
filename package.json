@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch backend/server.ts",
     "start": "node dist/backend/server.js",
-    "test": "node --import=tsx --test-concurrency=1 --test backend/app.test.ts backend/db/usage-events.test.ts backend/db/conversations.test.ts",
+    "test": "node --import=tsx --test-concurrency=1 --test backend/app.test.ts backend/research-agent.test.ts backend/db/usage-events.test.ts backend/db/conversations.test.ts",
     "db:migrate": "tsx backend/db/migrate.ts up",
     "db:rollback": "tsx backend/db/migrate.ts down"
   },
